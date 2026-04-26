@@ -1,0 +1,65 @@
+name: Release XCFramework
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-xcframework:
+    runs-on: macos-latest
+    env:
+      XCFRAMEWORK_ARCHIVE: GhosttyKit.xcframework.tar.gz
+      XCFRAMEWORK_CHECKSUM: GhosttyKit.xcframework.tar.gz.sha256
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Get required Zig version
+        id: zig
+        run: |
+          echo "version=$(sed -n -E 's/^\s*\.?minimum_zig_version\s*=\s*\"([^\"]+)\".*/\1/p' build.zig.zon)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: ${{ steps.zig.outputs.version }}
+
+      - name: Verify GitHub Release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Expected an existing GitHub Release for tag ${GITHUB_REF_NAME}, but none was found." >&2
+            echo "Create the Release object first, then push the tag again." >&2
+            exit 1
+          fi
+
+      - name: Build GhosttyKit.xcframework
+        run: |
+          zig build \
+            -Demit-xcframework=true \
+            -Dxcframework-target=universal \
+            -Doptimize=ReleaseFast
+
+      - name: Archive XCFramework
+        run: |
+          test -d macos/GhosttyKit.xcframework
+          tar -C macos -czf "${XCFRAMEWORK_ARCHIVE}" GhosttyKit.xcframework
+
+      - name: Generate checksum
+        run: |
+          shasum -a 256 "${XCFRAMEWORK_ARCHIVE}" > "${XCFRAMEWORK_CHECKSUM}"
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            "${XCFRAMEWORK_ARCHIVE}" \
+            "${XCFRAMEWORK_CHECKSUM}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
